@@ -1,0 +1,153 @@
+pip install pandas transformers torch tqdm
+import pandas as pd
+
+import torch
+
+import random
+
+from tqdm import tqdm
+
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+
+from google.colab import drive
+
+drive.mount('/content/drive')
+
+df = pd.read_csv("/content/drive/MyDrive/amazon_review_bi.csv")
+
+df.head()
+
+
+df = df.dropna(subset=["review_body", "product_title", "review_date"])
+
+df["year"] = pd.to_datetime(df["review_date"]).dt.year
+
+top_products = df["product_title"].value_counts().head(10).index
+
+df = df[df["product_title"].isin(top_products)]
+
+from huggingface_hub import notebook_login
+
+notebook_login()
+
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+tokenizer = AutoTokenizer.from_pretrained("t5-small")
+
+model = AutoModelForSeq2SeqLM.from_pretrained("t5-small").to(device)
+
+model.eval()
+
+
+import random
+
+import torch
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+def summarize_reviews(reviews, max_reviews=20):
+
+    reviews = random.sample(reviews, min(len(reviews), max_reviews))
+
+    text = " ".join(reviews)
+
+    text = text[:512]
+
+    input_text = "summarize: " + text
+
+    inputs = tokenizer(
+
+        input_text,
+
+        return_tensors="pt",
+
+        truncation=True
+
+    )
+
+
+    inputs = {k: v.to(device) for k, v in inputs.items()}
+
+    with torch.no_grad():
+
+        outputs = model.generate(
+
+            inputs["input_ids"],
+
+            max_length=60,
+
+            min_length=15,
+
+            num_beams=4,
+
+            early_stopping=True
+
+        )
+
+    return tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+
+results = []
+
+grouped = df.groupby(["product_title", "year"])
+
+for (product, year), group in tqdm(grouped):
+
+    reviews = group["review_body"].astype(str).tolist()
+
+    summary = summarize_reviews(reviews)
+
+    avg_sentiment = group["label"].mean()
+
+    results.append({
+
+        "product": product,
+
+        "year": year,
+
+        "num_reviews": len(reviews),
+
+        "avg_sentiment": avg_sentiment,
+
+        "summary": summary
+
+    })
+
+df_summary = pd.DataFrame(results)
+
+
+df_summary.head()
+
+
+import matplotlib.pyplot as plt
+
+df_summary.groupby("year")["avg_sentiment"].mean().plot(marker="o")
+
+plt.title("Average Sentiment Over Time")
+
+plt.ylabel("Sentiment")
+
+plt.show()
+
+
+df_summary.groupby("product")["avg_sentiment"].mean().sort_values(ascending=False)
+
+
+for y in sorted(df_summary["year"].unique()):
+
+    print("\nYEAR:", y)
+
+    print(
+
+        df_summary[df_summary["year"] == y]
+
+        .groupby("product")["avg_sentiment"]
+
+        .mean()
+
+        .sort_values(ascending=False)
+
+    )
+
+df_summary.to_csv("/content/drive/MyDrive/t5_business_insight.csv", index=False)
